@@ -7,13 +7,14 @@ from dotenv import load_dotenv
 from phi.agent import Agent
 from phi.model.google import Gemini
 from phi.tools.yfinance import YFinanceTools
+from phi.tools.youtube_tools import YouTubeTools
 from config import *
 
 # Load environment variables
 load_dotenv()
 
 
-agent = Agent(
+finance_agent = Agent(
     model=Gemini(id="gemini-1.5-flash-8b"),
     tools=[YFinanceTools(
         stock_price=True,
@@ -23,6 +24,17 @@ agent = Agent(
     # show_tool_calls=True,
     markdown=True,
     instructions=['Use tables to display the data'],
+)
+
+youtube_agent = Agent(
+    model=Gemini(id="gemini-1.5-flash-8b"),
+    tools=[YouTubeTools(
+        
+    )],
+    # show_tool_calls=True,
+    markdown=True,
+    description="You are a YouTube agent. Obtain the captions of a YouTube video and answer questions.",
+    instructions=[''],
 )
 
 # Enable logging
@@ -47,7 +59,7 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_message = await update.message.reply_text(ANALYZING_STATUS.format(symbol))
     
     try:
-        response = agent.run(
+        response = finance_agent.run(
             STOCK_ANALYSIS_PROMPT.format(symbol=symbol),
             stream=False
         ).content
@@ -75,7 +87,7 @@ async def compare_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_message = await update.message.reply_text(COMPARING_STATUS.format(symbol1, symbol2))
     
     try:
-        response = agent.run(
+        response = finance_agent.run(
             STOCK_COMPARISON_PROMPT.format(symbol1=symbol1, symbol2=symbol2),
             stream=False
         ).content
@@ -96,6 +108,54 @@ async def compare_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(INVALID_COMMAND)
 
+async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the youtube command."""
+    # Check if we have enough arguments
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(INVALID_YOUTUBE_COMMAND)
+        return
+
+    # Extract URL and question
+    video_url = context.args[0]
+    question = ' '.join(context.args[1:])
+
+    # Validate URL (basic check)
+    if not ('youtube.com' in video_url or 'youtu.be' in video_url):
+        await update.message.reply_text("Please provide a valid YouTube URL.")
+        return
+
+    status_message = await update.message.reply_text(YOUTUBE_ANALYZING)
+    
+    try:
+        response = youtube_agent.run(
+            YOUTUBE_PROMPT.format(question=question, url=video_url),
+            stream=False
+        ).content
+
+        print(response)
+
+        # Format the response
+        response_text = YOUTUBE_RESPONSE_TEMPLATE.format(
+            question=question,
+            response=str(response),
+            url=video_url
+        )
+
+        # Delete status message
+        await status_message.delete()
+        
+        # Send response
+        await update.message.reply_text(
+            response_text,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=False  # Allow video thumbnail preview
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in youtube_command: {str(e)}")
+        await status_message.delete()
+        await update.message.reply_text(YOUTUBE_ERROR)
+
 def main() -> None:
     """Start the bot."""
     application = Application.builder().token(os.getenv('TELEGRAM_BOT_TOKEN')).build()
@@ -105,6 +165,7 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stock", stock_command))
     application.add_handler(CommandHandler("compare", compare_command))
+    application.add_handler(CommandHandler("youtube", youtube_command))
     
     # Add message handler for other messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
